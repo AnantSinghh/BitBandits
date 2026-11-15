@@ -219,3 +219,4 @@ write_data          : =====< 128b data >========
 write_valid         : _____/-----------\________
 RAM Storage State   : === Old Line ===><=== New Block Committed on Edge ===
 ```
+

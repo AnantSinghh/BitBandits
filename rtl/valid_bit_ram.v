@@ -59,3 +59,4 @@ module valid_bit_ram #(
     end
 
 endmodule
+
