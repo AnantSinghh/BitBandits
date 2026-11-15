@@ -10,8 +10,8 @@
 //   - Controller FSM implementation (IDLE, LOOKUP, MEM_REQUEST, MEM_WAIT, REFILL, RESPOND)
 //   - Request latching and one-request-at-a-time protocol
 //   - Cache hit/miss control logic
-//   - Memory miss path, block-aligned address generation, handshake protocol
-//   - Refill sequencing and block alignment
+//   - Memory miss path and block alignment
+//   - Refill sequencing and tag/valid storage write control
 //   - CPU response generation and word selection
 // =============================================================================
 
@@ -88,7 +88,11 @@ module cache_controller #(
     reg [BLOCK_WIDTH-1:0] cached_block;
     reg [BLOCK_WIDTH-1:0] mem_block_buffer;
 
-    // Address field decoding from latched address
+    // Address field decoding from latched address:
+    // Tag:          latched_addr[31:10] (22 bits)
+    // Index:        latched_addr[9:4]   (6 bits)
+    // Block offset: latched_addr[3:0]   (4 bits)
+    // Word select:  latched_addr[3:2]   (2 bits)
     wire [TAG_WIDTH-1:0]   req_tag      = latched_addr[31:10];
     wire [INDEX_WIDTH-1:0] req_index    = latched_addr[9:4];
     wire [1:0]             req_word_sel = latched_addr[3:2];
@@ -128,7 +132,7 @@ module cache_controller #(
         end else begin
             current_state <= next_state;
 
-            // Latch request address on entering from IDLE
+            // Latch CPU request address on entering from IDLE
             if (current_state == S_IDLE && cpu_req_valid) begin
                 latched_addr <= cpu_req_addr;
             end
@@ -141,6 +145,12 @@ module cache_controller #(
             // Capture incoming block data from memory interface upon handshake completion
             if (current_state == S_MEM_WAIT && mem_req_ready) begin
                 mem_block_buffer <= mem_data;
+                cached_block     <= mem_data;
+            end
+
+            // Ensure cached_block is stable in REFILL
+            if (current_state == S_REFILL) begin
+                cached_block <= mem_block_buffer;
             end
         end
     end
@@ -194,27 +204,25 @@ module cache_controller #(
     // Output Generation (Combinational Control & Data Steering)
     // =========================================================================
     always @(*) begin
-        // CPU handshake
+        // CPU Handshake: Assert ready only when IDLE
         cpu_ready       = (current_state == S_IDLE);
         cpu_resp_valid  = (current_state == S_RESPOND);
         cpu_resp_data   = (current_state == S_RESPOND) ? selected_word : {DATA_WIDTH{1'b0}};
 
-        // Hit / Miss diagnostic indicators
+        // Hit / Miss diagnostic indicators during LOOKUP
         cache_hit_flag  = (current_state == S_LOOKUP && comp_hit);
         cache_miss_flag = (current_state == S_LOOKUP && comp_miss);
 
-        // Storage write controls
-        storage_write_en    = 1'b0;
+        // Cache Storage Write Controls: Active exclusively during REFILL state
+        storage_write_en    = (current_state == S_REFILL);
+        storage_write_valid = (current_state == S_REFILL);
         storage_write_index = req_index;
         storage_write_tag   = req_tag;
-        storage_write_data  = {BLOCK_WIDTH{1'b0}};
-        storage_write_valid = 1'b0;
+        storage_write_data  = mem_block_buffer;
 
-        // Memory request controls:
-        // mem_req is asserted ONLY during S_MEM_REQUEST (single pulse protocol)
-        // mem_addr is strictly block-aligned (lower 4 bits 4'b0000)
+        // Memory Request Controls: Asserted exclusively during MEM_REQUEST state
         mem_req  = (current_state == S_MEM_REQUEST);
-        mem_addr = {latched_addr[31:4], 4'b0000};
+        mem_addr = {latched_addr[31:4], 4'b0000}; // Block aligned
     end
 
 endmodule
