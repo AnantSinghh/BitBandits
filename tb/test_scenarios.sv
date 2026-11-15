@@ -102,3 +102,147 @@ task automatic run_test_cold_cache();
     end
 endtask
 
+// -----------------------------------------------------------------------------
+// TEST 2: Temporal Locality Test
+// - Access the same address repeatedly.
+// - Verify first access misses (compulsory).
+// - Verify subsequent accesses hit (zero memory refill, 2-cycle latency).
+// -----------------------------------------------------------------------------
+task automatic run_test_temporal_locality();
+    logic [31:0] test_addr;
+    logic [31:0] rdata;
+    logic        hit;
+    logic        miss;
+    int          lat;
+    logic [31:0] exp_data;
+    const int    NUM_REPEATS = 5;
+
+    $display("\n===============================================================================");
+    $display("   [TEST 2] TEMPORAL LOCALITY TEST (Repeated Access to Same Address)           ");
+    $display("===============================================================================");
+
+    test_addr = 32'h0000_2004; // Tag = 0x000008, Index = 0x00 (Line 0), Word = 1
+    exp_data  = ref_mem_word(test_addr);
+
+    for (int rep = 1; rep <= NUM_REPEATS; rep++) begin
+        total_tests++;
+        cpu_read(test_addr, rdata, hit, miss, lat);
+
+        if (rep == 1) begin
+            // First access must miss
+            if (miss && !hit && (rdata === exp_data)) begin
+                passed_tests++;
+                $display("   [PASS] Access %0d (Initial) : Miss confirmed | Latency = %0d cyc, Data = 0x%08h",
+                         rep, lat, rdata);
+            end else begin
+                failed_tests++;
+                $error("   [FAIL] Access %0d (Initial) : Expected Miss, Got Hit=%b, Miss=%b, Data=0x%08h",
+                       rep, hit, miss, rdata);
+            end
+        end else begin
+            // Subsequent accesses must hit
+            if (hit && !miss && (rdata === exp_data) && (lat == 2)) begin
+                passed_tests++;
+                $display("   [PASS] Access %0d (Repeated): Hit confirmed  | Latency = %0d cyc, Data = 0x%08h",
+                         rep, lat, rdata);
+            end else begin
+                failed_tests++;
+                $error("   [FAIL] Access %0d (Repeated): Expected Hit with 2-cyc latency! Got Hit=%b, Miss=%b, Lat=%0d, Data=0x%08h",
+                       rep, hit, miss, lat, rdata);
+            end
+        end
+    end
+endtask
+
+// -----------------------------------------------------------------------------
+// TEST 3: Spatial Locality Test
+// - Access four words in the same 16-byte block.
+// - Verify only the first access causes a miss.
+// - Verify all four returned words are correct.
+// -----------------------------------------------------------------------------
+task automatic run_test_spatial_locality();
+    logic [31:0] base_block_addr;
+    logic [31:0] word_addr;
+    logic [31:0] rdata;
+    logic        hit;
+    logic        miss;
+    int          lat;
+    logic [31:0] exp_data;
+
+    $display("\n===============================================================================");
+    $display("   [TEST 3] SPATIAL LOCALITY TEST (Access 4 Words in 16-Byte Block)            ");
+    $display("===============================================================================");
+
+    // Block 1: Access words sequentially: Word 0 -> 1 -> 2 -> 3
+    base_block_addr = 32'h0000_5A00;
+    $display("   --- Subtest 3A: Sequential Word In-Block Order (0 -> 1 -> 2 -> 3) ---");
+    for (int w = 0; w < 4; w++) begin
+        word_addr = base_block_addr + (w * 4);
+        exp_data  = ref_mem_word(word_addr);
+        total_tests++;
+
+        cpu_read(word_addr, rdata, hit, miss, lat);
+
+        if (w == 0) begin
+            // Word 0 must miss (fetches block)
+            if (miss && !hit && (rdata === exp_data)) begin
+                passed_tests++;
+                $display("   [PASS] Word %0d (Addr=0x%08h): Compulsory Miss | Latency = %0d cyc, Data = 0x%08h",
+                         w, word_addr, lat, rdata);
+            end else begin
+                failed_tests++;
+                $error("   [FAIL] Word %0d (Addr=0x%08h): Expected Miss! Got Hit=%b, Miss=%b, Data=0x%08h",
+                       w, word_addr, hit, miss, rdata);
+            end
+        end else begin
+            // Words 1, 2, 3 must hit due to spatial locality
+            if (hit && !miss && (rdata === exp_data) && (lat == 2)) begin
+                passed_tests++;
+                $display("   [PASS] Word %0d (Addr=0x%08h): Spatial Hit     | Latency = %0d cyc, Data = 0x%08h",
+                         w, word_addr, lat, rdata);
+            end else begin
+                failed_tests++;
+                $error("   [FAIL] Word %0d (Addr=0x%08h): Expected Spatial Hit! Got Hit=%b, Miss=%b, Lat=%0d, Data=0x%08h",
+                       w, word_addr, hit, miss, lat, rdata);
+            end
+        end
+    end
+
+    // Block 2: Access words out-of-order: Word 2 -> Word 0 -> Word 3 -> Word 1
+    base_block_addr = 32'h0000_6B00;
+    $display("\n   --- Subtest 3B: Non-sequential Word In-Block Order (2 -> 0 -> 3 -> 1) ---");
+    begin
+        int word_order[4] = '{2, 0, 3, 1};
+        for (int step = 0; step < 4; step++) begin
+            int w = word_order[step];
+            word_addr = base_block_addr + (w * 4);
+            exp_data  = ref_mem_word(word_addr);
+            total_tests++;
+
+            cpu_read(word_addr, rdata, hit, miss, lat);
+
+            if (step == 0) begin
+                if (miss && !hit && (rdata === exp_data)) begin
+                    passed_tests++;
+                    $display("   [PASS] Step %0d: Word %0d (Addr=0x%08h): Compulsory Miss | Latency = %0d cyc, Data = 0x%08h",
+                             step+1, w, word_addr, lat, rdata);
+                end else begin
+                    failed_tests++;
+                    $error("   [FAIL] Step %0d: Word %0d (Addr=0x%08h): Expected Miss! Got Hit=%b, Miss=%b, Data=0x%08h",
+                           step+1, w, word_addr, hit, miss, rdata);
+                end
+            end else begin
+                if (hit && !miss && (rdata === exp_data) && (lat == 2)) begin
+                    passed_tests++;
+                    $display("   [PASS] Step %0d: Word %0d (Addr=0x%08h): Spatial Hit     | Latency = %0d cyc, Data = 0x%08h",
+                             step+1, w, word_addr, lat, rdata);
+                end else begin
+                    failed_tests++;
+                    $error("   [FAIL] Step %0d: Word %0d (Addr=0x%08h): Expected Spatial Hit! Got Hit=%b, Miss=%b, Lat=%0d, Data=0x%08h",
+                           step+1, w, word_addr, hit, miss, lat, rdata);
+                end
+            end
+        end
+    end
+endtask
+

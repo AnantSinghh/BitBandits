@@ -266,6 +266,12 @@ module tb_cache_top;
         // TEST 1: Cold Cache Test
         run_test_cold_cache();
 
+        // TEST 2: Temporal Locality Test
+        run_test_temporal_locality();
+
+        // TEST 3: Spatial Locality Test
+        run_test_spatial_locality();
+
         // Print Summary
         $display("\n===============================================================================");
         $display("   TESTBENCH INITIALIZATION SUMMARY                                           ");
