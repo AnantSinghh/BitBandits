@@ -246,3 +246,127 @@ task automatic run_test_spatial_locality();
     end
 endtask
 
+// -----------------------------------------------------------------------------
+// TEST 5: Conflict Miss Test
+// - Generate addresses with identical index (e.g. Index 0) but different tags:
+//   Addr A: 0x00000000 (Tag 0, Index 0)
+//   Addr B: 0x00000400 (Tag 1, Index 0)
+//   Addr C: 0x00000800 (Tag 2, Index 0)
+// - Verify each access evicts and replaces the resident block.
+// - Re-access evicted addresses to prove conflict miss and replacement.
+// -----------------------------------------------------------------------------
+task automatic run_test_conflict_miss();
+    logic [31:0] addr_a, addr_b, addr_c;
+    logic [31:0] rdata;
+    logic        hit;
+    logic        miss;
+    int          lat;
+    logic [31:0] exp_data;
+
+    $display("\n===============================================================================");
+    $display("   [TEST 5] CONFLICT MISS & LINE REPLACEMENT TEST                              ");
+    $display("===============================================================================");
+
+    addr_a = 32'h0000_0000; // Tag 0x000000, Index 0, Offset 0
+    addr_b = 32'h0000_0400; // Tag 0x000001, Index 0, Offset 0
+    addr_c = 32'h0000_0800; // Tag 0x000002, Index 0, Offset 0
+
+    // Step 1: Initial cold load of Addr A into Index 0
+    total_tests++;
+    exp_data = ref_mem_word(addr_a);
+    cpu_read(addr_a, rdata, hit, miss, lat);
+    if (miss && !hit && (rdata === exp_data)) begin
+        passed_tests++;
+        $display("   [PASS] Step 1: Load Addr A (0x%08h) -> Compulsory Miss, Line 0 allocated Tag 0x000000", addr_a);
+    end else begin
+        failed_tests++;
+        $error("   [FAIL] Step 1: Expected Compulsory Miss for Addr A (0x%08h)!", addr_a);
+    end
+
+    // Verify Addr A hits when re-accessed immediately (resident in Line 0)
+    total_tests++;
+    cpu_read(addr_a, rdata, hit, miss, lat);
+    if (hit && !miss && (rdata === exp_data)) begin
+        passed_tests++;
+        $display("   [PASS] Step 2: Re-access Addr A (0x%08h) -> Hit confirmed (Tag 0x000000 resident)", addr_a);
+    end else begin
+        failed_tests++;
+        $error("   [FAIL] Step 2: Expected Hit for Addr A (0x%08h)!", addr_a);
+    end
+
+    // Step 3: Access Addr B -> Same index 0, Tag 1 != Tag 0 -> Conflict Miss & Replacement
+    total_tests++;
+    exp_data = ref_mem_word(addr_b);
+    cpu_read(addr_b, rdata, hit, miss, lat);
+    if (miss && !hit && (rdata === exp_data)) begin
+        passed_tests++;
+        $display("   [PASS] Step 3: Load Addr B (0x%08h) -> Conflict Miss confirmed! Evicted Tag 0x0, installed Tag 0x1", addr_b);
+    end else begin
+        failed_tests++;
+        $error("   [FAIL] Step 3: Expected Conflict Miss for Addr B (0x%08h)!", addr_b);
+    end
+
+    // Step 4: Access Addr C -> Same index 0, Tag 2 != Tag 1 -> Conflict Miss & Replacement
+    total_tests++;
+    exp_data = ref_mem_word(addr_c);
+    cpu_read(addr_c, rdata, hit, miss, lat);
+    if (miss && !hit && (rdata === exp_data)) begin
+        passed_tests++;
+        $display("   [PASS] Step 4: Load Addr C (0x%08h) -> Conflict Miss confirmed! Evicted Tag 0x1, installed Tag 0x2", addr_c);
+    end else begin
+        failed_tests++;
+        $error("   [FAIL] Step 4: Expected Conflict Miss for Addr C (0x%08h)!", addr_c);
+    end
+
+    // Step 5: Re-access Addr A -> Must MISS because it was evicted by B and C!
+    total_tests++;
+    exp_data = ref_mem_word(addr_a);
+    cpu_read(addr_a, rdata, hit, miss, lat);
+    if (miss && !hit && (rdata === exp_data)) begin
+        passed_tests++;
+        $display("   [PASS] Step 5: Re-access evicted Addr A -> Miss verified! Proves replacement & thrashing", addr_a);
+    end else begin
+        failed_tests++;
+        $error("   [FAIL] Step 5: Expected Miss for evicted Addr A! Got Hit=%b, Miss=%b", hit, miss);
+    end
+
+    // Step 6: Access Word 1 of Addr A (0x00000004) -> Must HIT (proves Addr A is now newly resident)
+    total_tests++;
+    exp_data = ref_mem_word(32'h0000_0004);
+    cpu_read(32'h0000_0004, rdata, hit, miss, lat);
+    if (hit && !miss && (rdata === exp_data)) begin
+        passed_tests++;
+        $display("   [PASS] Step 6: Access Word 1 of re-fetched block -> Spatial Hit confirmed!");
+    end else begin
+        failed_tests++;
+        $error("   [FAIL] Step 6: Expected Spatial Hit for Word 1!");
+    end
+
+    // Subtest 5B: Additional conflict test on Line 45 (Index = 6'd45 = 0x2D)
+    $display("\n   --- Subtest 5B: Conflict Replacement on Line 45 (0x2D) ---");
+    begin
+        logic [31:0] conf_x, conf_y;
+        conf_x = 32'h0000_02D0; // Tag 0x000000, Index 45 (0x2D)
+        conf_y = 32'h0000_06D0; // Tag 0x000001, Index 45 (0x2D)
+
+        // Access X
+        total_tests++;
+        exp_data = ref_mem_word(conf_x);
+        cpu_read(conf_x, rdata, hit, miss, lat);
+        if (miss && !hit && (rdata === exp_data)) passed_tests++;
+        else failed_tests++;
+
+        // Access Y (causes conflict miss and replaces X)
+        total_tests++;
+        exp_data = ref_mem_word(conf_y);
+        cpu_read(conf_y, rdata, hit, miss, lat);
+        if (miss && !hit && (rdata === exp_data)) begin
+            passed_tests++;
+            $display("   [PASS] Conflict Miss confirmed on Line 45: Addr=0x%08h evicted Addr=0x%08h", conf_y, conf_x);
+        end else begin
+            failed_tests++;
+            $error("   [FAIL] Conflict Miss on Line 45 failed!");
+        end
+    end
+endtask
+

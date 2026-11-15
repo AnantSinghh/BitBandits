@@ -272,6 +272,9 @@ module tb_cache_top;
         // TEST 3: Spatial Locality Test
         run_test_spatial_locality();
 
+        // TEST 5: Conflict Miss Test
+        run_test_conflict_miss();
+
         // Print Summary
         $display("\n===============================================================================");
         $display("   TESTBENCH INITIALIZATION SUMMARY                                           ");
