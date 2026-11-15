@@ -263,6 +263,9 @@ module tb_cache_top;
         // Run Basic Sanity Check
         run_basic_sanity_check();
 
+        // TEST 1: Cold Cache Test
+        run_test_cold_cache();
+
         // Print Summary
         $display("\n===============================================================================");
         $display("   TESTBENCH INITIALIZATION SUMMARY                                           ");
