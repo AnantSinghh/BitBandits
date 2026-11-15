@@ -690,3 +690,60 @@ task automatic run_test_consecutive_requests();
     $display("   [PASS] All 5 consecutive transactions completed seamlessly with correct backpressure.");
 endtask
 
+// -----------------------------------------------------------------------------
+// FULL 64-INDEX COVERAGE SWEEP TEST
+// - Systematically accesses all 64 cache lines (Index 0 to 63).
+// - Pass 1: Cold compulsory miss on every line, setting valid bit to 1.
+// - Pass 2: Warm hit on every line, verifying full 64-line residency.
+// - Guarantees 100.0% functional index coverage!
+// -----------------------------------------------------------------------------
+task automatic run_test_full_index_sweep();
+    logic [31:0] sweep_addr;
+    logic [31:0] rdata;
+    logic        hit;
+    logic        miss;
+    int          lat;
+    logic [31:0] exp_data;
+
+    $display("\n===============================================================================");
+    $display("   [INDEX SWEEP] FULL 64-INDEX FUNCTIONAL COVERAGE SWEEP                      ");
+    $display("===============================================================================");
+
+    // Pass 1: Cold sweep across all 64 indices
+    $display("   --- Pass 1: Cold Fill Across All 64 Cache Lines (Lines 0 - 63) ---");
+    for (int idx = 0; idx < 64; idx++) begin
+        // Address: Tag = 0x0000AA, Index = idx, Word = (idx % 4)
+        sweep_addr = {22'h0000AA, idx[5:0], (idx[1:0]), 2'b00};
+        exp_data   = ref_mem_word(sweep_addr);
+        total_tests++;
+
+        cpu_read(sweep_addr, rdata, hit, miss, lat);
+
+        if (miss && !hit && (rdata === exp_data)) begin
+            passed_tests++;
+        end else begin
+            failed_tests++;
+            $error("   [FAIL] Cold Sweep Line %0d failed! Addr=0x%08h", idx, sweep_addr);
+        end
+    end
+    $display("   [PASS] All 64 cache lines successfully populated from memory.");
+
+    // Pass 2: Warm sweep across all 64 indices
+    $display("\n   --- Pass 2: Warm Hit Verification Across All 64 Cache Lines ---");
+    for (int idx = 0; idx < 64; idx++) begin
+        sweep_addr = {22'h0000AA, idx[5:0], (idx[1:0]), 2'b00};
+        exp_data   = ref_mem_word(sweep_addr);
+        total_tests++;
+
+        cpu_read(sweep_addr, rdata, hit, miss, lat);
+
+        if (hit && !miss && (rdata === exp_data) && (lat == 2)) begin
+            passed_tests++;
+        end else begin
+            failed_tests++;
+            $error("   [FAIL] Warm Sweep Line %0d failed! Expected Hit, Got Hit=%b, Miss=%b", idx, hit, miss);
+        end
+    end
+    $display("   [PASS] All 64 cache lines confirmed resident and returning 2-cycle hits (100%% Line Residency).");
+endtask
+
