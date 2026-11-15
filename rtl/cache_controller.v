@@ -6,13 +6,12 @@
 //              tag lookup, cache hit/miss evaluation, memory refill sequencing,
 //              and CPU response generation.
 //
-// States:
-//   - S_IDLE:        Wait for CPU request, assert cpu_ready
-//   - S_LOOKUP:      Evaluate tag match and valid bit for requested line
-//   - S_MEM_REQUEST: Initiate 16-byte block fetch from main memory
-//   - S_MEM_WAIT:    Wait for memory interface ready signal (mem_req_ready)
-//   - S_REFILL:      Write received 128-bit block into cache line and set valid
-//   - S_RESPOND:     Extract 32-bit word, assert cpu_resp_valid, return to IDLE
+// Technical Ownership:
+//   - Controller FSM implementation (IDLE, LOOKUP, MEM_REQUEST, MEM_WAIT, REFILL, RESPOND)
+//   - Request latching and one-request-at-a-time protocol
+//   - Cache hit/miss control logic
+//   - Refill sequencing and block alignment
+//   - CPU response generation and word selection
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -78,22 +77,51 @@ module cache_controller #(
 
     reg [2:0] current_state, next_state;
 
-    // Export current state for verification and top-level monitoring
+    // Export current state
     assign fsm_state = current_state;
 
     // =========================================================================
-    // State Register (Sequential Process)
+    // Internal Registers for Request Latching
+    // =========================================================================
+    reg [ADDR_WIDTH-1:0] latched_addr;
+
+    // Address field decoding from latched address:
+    // Tag:          latched_addr[31:10] (22 bits)
+    // Index:        latched_addr[9:4]   (6 bits)
+    // Block offset: latched_addr[3:0]   (4 bits)
+    // Word select:  latched_addr[3:2]   (2 bits)
+    wire [TAG_WIDTH-1:0]   req_tag      = latched_addr[31:10];
+    wire [INDEX_WIDTH-1:0] req_index    = latched_addr[9:4];
+    wire [1:0]             req_word_sel = latched_addr[3:2];
+
+    // Read index to cache storage during lookup
+    assign storage_read_index = (current_state == S_IDLE && cpu_req_valid) ?
+                                cpu_req_addr[9:4] : req_index;
+
+    // Route tags and valid flag to comparator
+    assign comp_stored_tag   = storage_read_tag;
+    assign comp_req_tag      = req_tag;
+    assign comp_stored_valid = storage_read_valid;
+
+    // =========================================================================
+    // Sequential Process: State Transition and Address Latching
     // =========================================================================
     always @(posedge clk or posedge rst) begin
         if (rst) begin
             current_state <= S_IDLE;
+            latched_addr  <= {ADDR_WIDTH{1'b0}};
         end else begin
             current_state <= next_state;
+
+            // Latch CPU address upon transitioning from IDLE on a valid request
+            if (current_state == S_IDLE && cpu_req_valid) begin
+                latched_addr <= cpu_req_addr;
+            end
         end
     end
 
     // =========================================================================
-    // Next-State Logic (Combinational Process - Initial Skeleton)
+    // Next-State Logic (Combinational Process)
     // =========================================================================
     always @(*) begin
         next_state = current_state;
@@ -137,23 +165,23 @@ module cache_controller #(
         endcase
     end
 
-    // Default driver assignments for initial compilation check
-    assign storage_read_index = {INDEX_WIDTH{1'b0}};
-    assign comp_stored_tag    = storage_read_tag;
-    assign comp_req_tag       = {TAG_WIDTH{1'b0}};
-    assign comp_stored_valid  = storage_read_valid;
-
+    // =========================================================================
+    // Output Generation (Combinational Default & State-Specific Logic)
+    // =========================================================================
     always @(*) begin
+        // Ready only in IDLE state; controller is busy during all other states
         cpu_ready           = (current_state == S_IDLE);
         cpu_resp_valid      = 1'b0;
         cpu_resp_data       = {DATA_WIDTH{1'b0}};
+
         storage_write_en    = 1'b0;
-        storage_write_index = {INDEX_WIDTH{1'b0}};
-        storage_write_tag   = {TAG_WIDTH{1'b0}};
+        storage_write_index = req_index;
+        storage_write_tag   = req_tag;
         storage_write_data  = {BLOCK_WIDTH{1'b0}};
         storage_write_valid = 1'b0;
+
         mem_req             = 1'b0;
-        mem_addr            = {ADDR_WIDTH{1'b0}};
+        mem_addr            = {latched_addr[31:4], 4'b0000}; // Block aligned
         cache_hit_flag      = 1'b0;
         cache_miss_flag     = 1'b0;
     end
