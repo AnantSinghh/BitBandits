@@ -81,41 +81,58 @@ module cache_controller #(
     assign fsm_state = current_state;
 
     // =========================================================================
-    // Internal Registers for Request Latching
+    // Internal Registers for Request Latching and Line Buffer
     // =========================================================================
-    reg [ADDR_WIDTH-1:0] latched_addr;
+    reg [ADDR_WIDTH-1:0]  latched_addr;
+    reg [BLOCK_WIDTH-1:0] cached_block;
 
-    // Address field decoding from latched address:
-    // Tag:          latched_addr[31:10] (22 bits)
-    // Index:        latched_addr[9:4]   (6 bits)
-    // Block offset: latched_addr[3:0]   (4 bits)
-    // Word select:  latched_addr[3:2]   (2 bits)
+    // Address field decoding from latched address
     wire [TAG_WIDTH-1:0]   req_tag      = latched_addr[31:10];
     wire [INDEX_WIDTH-1:0] req_index    = latched_addr[9:4];
     wire [1:0]             req_word_sel = latched_addr[3:2];
 
-    // Read index to cache storage during lookup
+    // Read index driven to storage
     assign storage_read_index = (current_state == S_IDLE && cpu_req_valid) ?
                                 cpu_req_addr[9:4] : req_index;
 
-    // Route tags and valid flag to comparator
+    // Route storage signals and requested tag to comparator
     assign comp_stored_tag   = storage_read_tag;
     assign comp_req_tag      = req_tag;
     assign comp_stored_valid = storage_read_valid;
 
     // =========================================================================
-    // Sequential Process: State Transition and Address Latching
+    // Word Selection Multiplexer (Four 32-bit words within 128-bit block)
+    // =========================================================================
+    reg [DATA_WIDTH-1:0] selected_word;
+    always @(*) begin
+        case (req_word_sel)
+            2'b00:   selected_word = cached_block[31:0];
+            2'b01:   selected_word = cached_block[63:32];
+            2'b10:   selected_word = cached_block[95:64];
+            2'b11:   selected_word = cached_block[127:96];
+            default: selected_word = cached_block[31:0];
+        endcase
+    end
+
+    // =========================================================================
+    // Sequential Process: State Transition, Latching, and Buffer Updates
     // =========================================================================
     always @(posedge clk or posedge rst) begin
         if (rst) begin
             current_state <= S_IDLE;
             latched_addr  <= {ADDR_WIDTH{1'b0}};
+            cached_block  <= {BLOCK_WIDTH{1'b0}};
         end else begin
             current_state <= next_state;
 
-            // Latch CPU address upon transitioning from IDLE on a valid request
+            // Latch request address on entering from IDLE
             if (current_state == S_IDLE && cpu_req_valid) begin
                 latched_addr <= cpu_req_addr;
+            end
+
+            // On Cache Hit in LOOKUP, latch data block directly from storage
+            if (current_state == S_LOOKUP && comp_hit) begin
+                cached_block <= storage_read_data;
             end
         end
     end
@@ -166,24 +183,28 @@ module cache_controller #(
     end
 
     // =========================================================================
-    // Output Generation (Combinational Default & State-Specific Logic)
+    // Output Generation (Combinational Control & Data Steering)
     // =========================================================================
     always @(*) begin
-        // Ready only in IDLE state; controller is busy during all other states
-        cpu_ready           = (current_state == S_IDLE);
-        cpu_resp_valid      = 1'b0;
-        cpu_resp_data       = {DATA_WIDTH{1'b0}};
+        // CPU handshake
+        cpu_ready       = (current_state == S_IDLE);
+        cpu_resp_valid  = (current_state == S_RESPOND);
+        cpu_resp_data   = (current_state == S_RESPOND) ? selected_word : {DATA_WIDTH{1'b0}};
 
+        // Hit / Miss diagnostic indicators
+        cache_hit_flag  = (current_state == S_LOOKUP && comp_hit);
+        cache_miss_flag = (current_state == S_LOOKUP && comp_miss);
+
+        // Storage write controls
         storage_write_en    = 1'b0;
         storage_write_index = req_index;
         storage_write_tag   = req_tag;
         storage_write_data  = {BLOCK_WIDTH{1'b0}};
         storage_write_valid = 1'b0;
 
-        mem_req             = 1'b0;
-        mem_addr            = {latched_addr[31:4], 4'b0000}; // Block aligned
-        cache_hit_flag      = 1'b0;
-        cache_miss_flag     = 1'b0;
+        // Memory request controls
+        mem_req  = 1'b0;
+        mem_addr = {latched_addr[31:4], 4'b0000}; // Block aligned
     end
 
 endmodule
