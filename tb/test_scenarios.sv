@@ -370,3 +370,93 @@ task automatic run_test_conflict_miss();
     end
 endtask
 
+// -----------------------------------------------------------------------------
+// TEST 4: Sequential Access Test
+// - Generate sequential addresses across consecutive 32-bit words.
+// - Analyze block reuse and expected hit behavior:
+//   * Stride of 4 bytes -> Exactly 1 miss per 4-word block, 3 hits per block (75% hit rate).
+//   * Second pass over resident blocks -> 100% hits (32/32 hits).
+// -----------------------------------------------------------------------------
+task automatic run_test_sequential_access();
+    logic [31:0] base_addr;
+    logic [31:0] cur_addr;
+    logic [31:0] rdata;
+    logic        hit;
+    logic        miss;
+    int          lat;
+    logic [31:0] exp_data;
+
+    int seq_hits_pass1;
+    int seq_miss_pass1;
+    int seq_hits_pass2;
+    int seq_miss_pass2;
+    const int NUM_WORDS = 32; // 32 words = 8 blocks = 128 bytes
+
+    $display("\n===============================================================================");
+    $display("   [TEST 4] SEQUENTIAL ACCESS & STREAMING BLOCK REUSE TEST                     ");
+    $display("===============================================================================");
+
+    base_addr      = 32'h0000_3000;
+    seq_hits_pass1 = 0;
+    seq_miss_pass1 = 0;
+    seq_hits_pass2 = 0;
+    seq_miss_pass2 = 0;
+
+    $display("   --- Pass 1: Cold Streaming Over %0d Sequential 32-Bit Words ---", NUM_WORDS);
+    for (int i = 0; i < NUM_WORDS; i++) begin
+        cur_addr = base_addr + (i * 4);
+        exp_data = ref_mem_word(cur_addr);
+        total_tests++;
+
+        cpu_read(cur_addr, rdata, hit, miss, lat);
+
+        if (rdata !== exp_data) begin
+            failed_tests++;
+            $error("   [FAIL] Sequential Word %0d (0x%08h) Data Mismatch! Got 0x%08h, Exp 0x%08h",
+                   i, cur_addr, rdata, exp_data);
+        end else begin
+            passed_tests++;
+        end
+
+        // Check hit/miss pattern: word offset 0 must miss, offsets 1,2,3 must hit
+        if (cur_addr[3:2] == 2'b00) begin
+            if (miss && !hit) begin
+                seq_miss_pass1++;
+            end else begin
+                $error("   [FAIL] Sequential block start (Word %0d) expected miss!", i);
+            end
+        end else begin
+            if (hit && !miss) begin
+                seq_hits_pass1++;
+            end else begin
+                $error("   [FAIL] Sequential intra-block (Word %0d) expected spatial hit!", i);
+            end
+        end
+    end
+
+    $display("   [PASS] Pass 1 Complete: %0d Hits, %0d Misses (Observed Hit Rate = %0.1f%%, Expected = 75.0%%)",
+             seq_hits_pass1, seq_miss_pass1, (seq_hits_pass1 * 100.0) / NUM_WORDS);
+
+    // Pass 2: Re-stream the exact same 32 words (all 8 blocks now resident in cache)
+    $display("\n   --- Pass 2: Warm Streaming Over Same %0d Words (Cache Residency Verification) ---", NUM_WORDS);
+    for (int i = 0; i < NUM_WORDS; i++) begin
+        cur_addr = base_addr + (i * 4);
+        exp_data = ref_mem_word(cur_addr);
+        total_tests++;
+
+        cpu_read(cur_addr, rdata, hit, miss, lat);
+
+        if ((rdata === exp_data) && hit && !miss && (lat == 2)) begin
+            passed_tests++;
+            seq_hits_pass2++;
+        end else begin
+            failed_tests++;
+            seq_miss_pass2++;
+            $error("   [FAIL] Pass 2 Word %0d expected warm hit! Hit=%b, Miss=%b, Lat=%0d", i, hit, miss, lat);
+        end
+    end
+
+    $display("   [PASS] Pass 2 Complete: %0d Hits, %0d Misses (Observed Hit Rate = %0.1f%%, Expected = 100.0%%)",
+             seq_hits_pass2, seq_miss_pass2, (seq_hits_pass2 * 100.0) / NUM_WORDS);
+endtask
+
