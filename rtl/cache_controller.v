@@ -10,6 +10,7 @@
 //   - Controller FSM implementation (IDLE, LOOKUP, MEM_REQUEST, MEM_WAIT, REFILL, RESPOND)
 //   - Request latching and one-request-at-a-time protocol
 //   - Cache hit/miss control logic
+//   - Memory miss path, block-aligned address generation, handshake protocol
 //   - Refill sequencing and block alignment
 //   - CPU response generation and word selection
 // =============================================================================
@@ -81,10 +82,11 @@ module cache_controller #(
     assign fsm_state = current_state;
 
     // =========================================================================
-    // Internal Registers for Request Latching and Line Buffer
+    // Internal Registers for Request Latching and Line Buffers
     // =========================================================================
     reg [ADDR_WIDTH-1:0]  latched_addr;
     reg [BLOCK_WIDTH-1:0] cached_block;
+    reg [BLOCK_WIDTH-1:0] mem_block_buffer;
 
     // Address field decoding from latched address
     wire [TAG_WIDTH-1:0]   req_tag      = latched_addr[31:10];
@@ -119,9 +121,10 @@ module cache_controller #(
     // =========================================================================
     always @(posedge clk or posedge rst) begin
         if (rst) begin
-            current_state <= S_IDLE;
-            latched_addr  <= {ADDR_WIDTH{1'b0}};
-            cached_block  <= {BLOCK_WIDTH{1'b0}};
+            current_state    <= S_IDLE;
+            latched_addr     <= {ADDR_WIDTH{1'b0}};
+            cached_block     <= {BLOCK_WIDTH{1'b0}};
+            mem_block_buffer <= {BLOCK_WIDTH{1'b0}};
         end else begin
             current_state <= next_state;
 
@@ -133,6 +136,11 @@ module cache_controller #(
             // On Cache Hit in LOOKUP, latch data block directly from storage
             if (current_state == S_LOOKUP && comp_hit) begin
                 cached_block <= storage_read_data;
+            end
+
+            // Capture incoming block data from memory interface upon handshake completion
+            if (current_state == S_MEM_WAIT && mem_req_ready) begin
+                mem_block_buffer <= mem_data;
             end
         end
     end
@@ -202,9 +210,11 @@ module cache_controller #(
         storage_write_data  = {BLOCK_WIDTH{1'b0}};
         storage_write_valid = 1'b0;
 
-        // Memory request controls
-        mem_req  = 1'b0;
-        mem_addr = {latched_addr[31:4], 4'b0000}; // Block aligned
+        // Memory request controls:
+        // mem_req is asserted ONLY during S_MEM_REQUEST (single pulse protocol)
+        // mem_addr is strictly block-aligned (lower 4 bits 4'b0000)
+        mem_req  = (current_state == S_MEM_REQUEST);
+        mem_addr = {latched_addr[31:4], 4'b0000};
     end
 
 endmodule
