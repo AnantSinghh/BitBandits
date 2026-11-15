@@ -278,6 +278,15 @@ module tb_cache_top;
         // TEST 5: Conflict Miss Test
         run_test_conflict_miss();
 
+        // TEST 6: Random Access Workload
+        run_test_random_access();
+
+        // TEST 7: Reset Behavior
+        run_test_reset_behavior();
+
+        // TEST 8: Consecutive Requests & Backpressure
+        run_test_consecutive_requests();
+
         // Print Summary
         $display("\n===============================================================================");
         $display("   TESTBENCH INITIALIZATION SUMMARY                                           ");
